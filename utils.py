@@ -1,10 +1,23 @@
 import sys
 import copy
 import random
+import json
 import numpy as np
 from tqdm import tqdm
 from collections import defaultdict
 from multiprocessing import Process, Queue
+
+with open("data/category_mapping.json", "r") as f:
+    item_category_mapping = json.load(f)["product_to_category"]
+
+cat_to_items = defaultdict(list)
+for item_id, cat_id in item_category_mapping.items():
+    cat_to_items[cat_id].append(item_id)
+
+# Pre-convert to sets for faster subtraction logic
+cat_to_items_set = {k: set(v) for k, v in cat_to_items.items()}
+all_items_set = item_category_mapping.keys()
+item_to_cat = {int(item_id): cat_id for item_id, cat_id in item_category_mapping.items()}
 
 def random_neq(l, r, s):
     t = np.random.randint(l, r)
@@ -37,25 +50,40 @@ def Relation(user_train, usernum, maxlen, time_span):
         data_train[user] = computeRePos(time_seq, time_span)
     return data_train
 
-def sample_function(user_train, usernum, itemnum, batch_size, maxlen, relation_matrix, result_queue, SEED):
+def sample_function(user_train, usernum, itemnum, batch_size, maxlen, relation_matrix, result_queue, SEED, cat_to_items_set, item_to_cat):
     def sample(user):
-
         seq = np.zeros([maxlen], dtype=np.int32)
         time_seq = np.zeros([maxlen], dtype=np.int32)
         pos = np.zeros([maxlen], dtype=np.int32)
         neg = np.zeros([maxlen], dtype=np.int32)
-        nxt = user_train[user][-1][0]
-    
+        
+        user_history = user_train[user]
+        ts = set(map(lambda x: x[0], user_history))
+        nxt = user_history[-1][0]
         idx = maxlen - 1
-        ts = set(map(lambda x: x[0],user_train[user]))
-        for i in reversed(user_train[user][:-1]):
+        
+        for i in reversed(user_history[:-1]):
             seq[idx] = i[0]
             time_seq[idx] = i[1]
             pos[idx] = nxt
-            if nxt != 0: neg[idx] = random_neq(1, itemnum + 1, ts)
+            
+            if nxt != 0:
+                # --- START HARD NEGATIVE LOGIC ---
+                target_cat = item_to_cat.get(nxt)
+                # Candidates: Items in same category MINUS items user has already seen
+                candidates = list(cat_to_items_set.get(target_cat, set()) - ts)
+                
+                if len(candidates) > 0:
+                    neg[idx] = random.choice(candidates)
+                else:
+                    # Fallback to standard random if category is empty/fully seen
+                    neg[idx] = random_neq(1, itemnum + 1, ts)
+                # --- END HARD NEGATIVE LOGIC ---
+                
             nxt = i[0]
             idx -= 1
             if idx == -1: break
+            
         time_matrix = relation_matrix[user]
         return (user, seq, time_seq, time_matrix, pos, neg)
 
@@ -73,17 +101,14 @@ class WarpSampler(object):
     def __init__(self, User, usernum, itemnum, relation_matrix, batch_size=64, maxlen=10,n_workers=1):
         self.result_queue = Queue(maxsize=n_workers * 10)
         self.processors = []
+
         for i in range(n_workers):
             self.processors.append(
-                Process(target=sample_function, args=(User,
-                                                      usernum,
-                                                      itemnum,
-                                                      batch_size,
-                                                      maxlen,
-                                                      relation_matrix,
-                                                      self.result_queue,
-                                                      np.random.randint(2e9)
-                                                      )))
+                Process(target=sample_function, args=(
+                    User, usernum, itemnum, batch_size, maxlen, relation_matrix, 
+                    self.result_queue, np.random.randint(2e9),
+                    cat_to_items_set, item_to_cat # Add these here!
+                )))
             self.processors[-1].daemon = True
             self.processors[-1].start()
 
@@ -199,25 +224,34 @@ def data_partition(fname):
     return [user_train, user_valid, user_test, usernum, itemnum, timenum]
 
 
-def evaluate(model, dataset, args):
+import numpy as np
+import random
+import sys
+import copy
+
+def evaluate(model, dataset, args, item_to_cat, cat_to_items_set):
     [train, valid, test, usernum, itemnum, timenum] = copy.deepcopy(dataset)
 
     NDCG = 0.0
     HT = 0.0
     valid_user = 0.0
+    
+    # Safety catalog for fallback sampling
+    all_items_set = set(range(1, itemnum + 1))
 
-    if usernum>10000:
+    if usernum > 10000:
         users = random.sample(range(1, usernum + 1), 10000)
     else:
         users = range(1, usernum + 1)
+        
     for u in users:
-
         if len(train[u]) < 1 or len(test[u]) < 1: continue
 
         seq = np.zeros([args.maxlen], dtype=np.int32)
         time_seq = np.zeros([args.maxlen], dtype=np.int32)
         idx = args.maxlen - 1
         
+        # Build the input sequence (ending with the validation item)
         seq[idx] = valid[u][0][0]
         time_seq[idx] = valid[u][0][1]
         idx -= 1
@@ -226,79 +260,111 @@ def evaluate(model, dataset, args):
             time_seq[idx] = i[1]
             idx -= 1
             if idx == -1: break
-        rated = set(map(lambda x: x[0],train[u]))
+            
+        # Target item and its category
+        target_item = test[u][0][0]
+        target_cat = item_to_cat.get(target_item)
+        
+        # Items the user has already seen (to avoid false negatives)
+        rated = set(map(lambda x: x[0], train[u]))
         rated.add(valid[u][0][0])
-        rated.add(test[u][0][0])
+        rated.add(target_item)
         rated.add(0)
-        item_idx = [test[u][0][0]]
-        for _ in range(100):
-            t = np.random.randint(1, itemnum + 1)
-            while t in rated: t = np.random.randint(1, itemnum + 1)
-            item_idx.append(t)
+
+        # START HARD NEGATIVE SAMPLING
+        item_idx = [target_item]
+        
+        # Find candidates in the same category
+        candidates = list(cat_to_items_set.get(target_cat, set()) - rated)
+        
+        if len(candidates) >= 100:
+            item_idx.extend(random.sample(candidates, 100))
+        else:
+            # Not enough in category? Take all available and fill from global pool
+            item_idx.extend(candidates)
+            shortfall = 100 - len(candidates)
+            remaining_pool = list(all_items_set - rated - set(candidates))
+            item_idx.extend(random.sample(remaining_pool, shortfall))
+        # END HARD NEGATIVE SAMPLING
 
         time_matrix = computeRePos(time_seq, args.time_span)
-
-        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix],item_idx]])
+        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix], item_idx]])
         predictions = predictions[0]
 
+        # Rank of the first item (target_item) among the 101 items
         rank = predictions.argsort().argsort()[0].item()
 
         valid_user += 1
-
         if rank < 10:
             NDCG += 1 / np.log2(rank + 2)
             HT += 1
+        
         if valid_user % 100 == 0:
-            print('.',end='')
+            print('.', end='')
             sys.stdout.flush()
 
     return NDCG / valid_user, HT / valid_user
 
 
-def evaluate_valid(model, dataset, args):
+def evaluate_valid(model, dataset, args, item_to_cat, cat_to_items_set):
     [train, valid, test, usernum, itemnum, timenum] = copy.deepcopy(dataset)
 
     NDCG = 0.0
-    valid_user = 0.0
     HT = 0.0
-    if usernum>10000:
+    valid_user = 0.0
+    all_items_set = set(range(1, itemnum + 1))
+
+    if usernum > 10000:
         users = random.sample(range(1, usernum + 1), 10000)
     else:
         users = range(1, usernum + 1)
+
     for u in users:
         if len(train[u]) < 1 or len(valid[u]) < 1: continue
 
         seq = np.zeros([args.maxlen], dtype=np.int32)
         time_seq = np.zeros([args.maxlen], dtype=np.int32)
         idx = args.maxlen - 1
+        
+        # Valid logic uses train history only
         for i in reversed(train[u]):
             seq[idx] = i[0]
             time_seq[idx] = i[1]
             idx -= 1
             if idx == -1: break
 
+        target_item = valid[u][0][0]
+        target_cat = item_to_cat.get(target_item)
+        
         rated = set(map(lambda x: x[0], train[u]))
-        rated.add(valid[u][0][0])
+        rated.add(target_item)
         rated.add(0)
-        item_idx = [valid[u][0][0]]
-        for _ in range(100):
-            t = np.random.randint(1, itemnum + 1)
-            while t in rated: t = np.random.randint(1, itemnum + 1)
-            item_idx.append(t)
+
+        # HARD NEGATIVE SAMPLING
+        item_idx = [target_item]
+        candidates = list(cat_to_items_set.get(target_cat, set()) - rated)
+        
+        if len(candidates) >= 100:
+            item_idx.extend(random.sample(candidates, 100))
+        else:
+            item_idx.extend(candidates)
+            shortfall = 100 - len(candidates)
+            remaining_pool = list(all_items_set - rated - set(candidates))
+            item_idx.extend(random.sample(remaining_pool, shortfall))
 
         time_matrix = computeRePos(time_seq, args.time_span)
-        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix],item_idx]])
+        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix], item_idx]])
         predictions = predictions[0]
 
         rank = predictions.argsort().argsort()[0].item()
 
         valid_user += 1
-
         if rank < 10:
             NDCG += 1 / np.log2(rank + 2)
             HT += 1
+            
         if valid_user % 100 == 0:
-            print('.',end='')
+            print('.', end='')
             sys.stdout.flush()
 
     return NDCG / valid_user, HT / valid_user
