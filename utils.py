@@ -12,11 +12,11 @@ with open("data/category_mapping.json", "r") as f:
 
 cat_to_items = defaultdict(list)
 for item_id, cat_id in item_category_mapping.items():
-    cat_to_items[cat_id].append(item_id)
+    cat_to_items[cat_id].append(int(item_id))
 
 # Pre-convert to sets for faster subtraction logic
 cat_to_items_set = {k: set(v) for k, v in cat_to_items.items()}
-all_items_set = item_category_mapping.keys()
+all_items_set = {int(i) for i in item_category_mapping.keys()}
 item_to_cat = {int(item_id): cat_id for item_id, cat_id in item_category_mapping.items()}
 
 def random_neq(l, r, s):
@@ -26,7 +26,6 @@ def random_neq(l, r, s):
     return t
 
 def computeRePos(time_seq, time_span):
-    
     size = time_seq.shape[0]
     time_matrix = np.zeros([size, size], dtype=np.int32)
     for i in range(size):
@@ -228,12 +227,6 @@ def data_partition(fname):
             user_test[user].append(User[user][-1])
     print('Preparing done...')
     return [user_train, user_valid, user_test, usernum, itemnum, timenum]
-
-
-import numpy as np
-import random
-import sys
-import copy
 
 def evaluate(model, dataset, args, item_to_cat, cat_to_items_set):
     [train, valid, test, usernum, itemnum, timenum] = copy.deepcopy(dataset)
