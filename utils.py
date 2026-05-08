@@ -98,16 +98,22 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, relation_m
         result_queue.put(zip(*one_batch))
 
 class WarpSampler(object):
-    def __init__(self, User, usernum, itemnum, relation_matrix, batch_size=64, maxlen=10,n_workers=1):
+    def __init__(self, User, usernum, itemnum, relation_matrix, batch_size=64, maxlen=10, n_workers=1, cat_to_items_set=None, item_to_cat=None):
         self.result_queue = Queue(maxsize=n_workers * 10)
         self.processors = []
 
         for i in range(n_workers):
             self.processors.append(
-                Process(target=sample_function, args=(
-                    User, usernum, itemnum, batch_size, maxlen, relation_matrix, 
-                    self.result_queue, np.random.randint(2e9),
-                    cat_to_items_set, item_to_cat # Add these here!
+                Process(target=sample_function, args=(User,
+                    usernum,
+                    itemnum,
+                    batch_size,
+                    maxlen,
+                    relation_matrix,
+                    self.result_queue,
+                    np.random.randint(2e9),
+                    cat_to_items_set, # Pass it to the worker
+                    item_to_cat      # Pass it to the worker
                 )))
             self.processors[-1].daemon = True
             self.processors[-1].start()
