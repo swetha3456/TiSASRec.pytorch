@@ -98,6 +98,10 @@ if args.state_dict_path is not None:
 if args.inference_only:
     model.eval()
     # --- UPDATED: Pass mappings to Evaluation ---
+    if itemnum != model.item_num:
+        print(f"Fixing itemnum mismatch: {itemnum} -> {model.item_num}")
+        itemnum = model.item_num
+
     t_test = evaluate(model, dataset, args, item_to_cat, cat_to_items_set)
     print('test (NDCG@10: %.4f, HR@10: %.4f)' % (t_test[0], t_test[1]))
 
@@ -139,6 +143,11 @@ for epoch in range(epoch_start_idx, args.num_epochs + 1):
         model.eval()
         t1 = time.time() - t0
         T += t1
+
+        if itemnum != model.item_num:
+            print(f"Fixing itemnum mismatch: {itemnum} -> {model.item_num}")
+            itemnum = model.item_num
+            
         print('Evaluating', end='')
         # --- UPDATED: Pass mappings to Evaluation ---
         t_test = evaluate(model, dataset, args, item_to_cat, cat_to_items_set)
