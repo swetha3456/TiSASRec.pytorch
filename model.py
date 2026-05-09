@@ -139,7 +139,7 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
             # self.pos_sigmoid = torch.nn.Sigmoid()
             # self.neg_sigmoid = torch.nn.Sigmoid()
 
-    def seq2feats(self, user_ids, log_seqs, time_matrices):
+    def seq2feats(self, log_seqs, time_matrices):
         seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
         seqs = self.item_emb_dropout(seqs)
