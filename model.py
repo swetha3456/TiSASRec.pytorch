@@ -204,7 +204,7 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
         log_seqs = torch.clamp(torch.LongTensor(log_seqs).to(self.dev), 0, self.item_num)
         
         # 2. Get sequence features
-        log_feats = self.log2feats(log_seqs, time_matrices)
+        log_feats = self.seq2feats(log_seqs, time_matrices)
         final_feat = log_feats[:, -1, :] # [Batch, H]
 
         # 3. Safety Clamp for the items we are ranking
