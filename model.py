@@ -140,7 +140,9 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
             # self.neg_sigmoid = torch.nn.Sigmoid()
 
     def seq2feats(self, log_seqs, time_matrices):
-        seqs = self.item_emb(torch.LongTensor(log_seqs).to(self.dev))
+        if not torch.is_tensor(log_seqs):
+            log_seqs = torch.LongTensor(log_seqs)
+        seqs = self.item_emb(log_seqs.to(self.dev))
         seqs *= self.item_emb.embedding_dim ** 0.5
         seqs = self.item_emb_dropout(seqs)
 
@@ -200,29 +202,27 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
         return pos_logits, neg_logits # pos_pred, neg_pred
 
     def predict(self, user_ids, log_seqs, time_matrices, item_indices):
-        # 1. Convert to tensors and move to the device (GPU) immediately
-        # We use .to(self.dev) to match the model's location
-        u = torch.from_numpy(np.array(user_ids)).long().to(self.dev)
-        seq = torch.from_numpy(np.array(log_seqs)).long().to(self.dev)
-        time_mat = torch.from_numpy(np.array(time_matrices)).long().to(self.dev)
-        item_idx = torch.from_numpy(np.array(item_indices)).long().to(self.dev)
+        # 1. Convert everything to CPU tensors first to avoid the "TensorOptions" error
+        u = torch.from_numpy(np.array(user_ids)).long()
+        seq = torch.from_numpy(np.array(log_seqs)).long()
+        time_mat = torch.from_numpy(np.array(time_matrices)).long()
+        item_idx = torch.from_numpy(np.array(item_indices)).long()
 
-        # 2. Safety Clamp to prevent index out of bounds
+        # 2. Safety Clamp
         seq = torch.clamp(seq, 0, self.item_num)
         item_idx = torch.clamp(item_idx, 0, self.item_num)
 
-        # 3. Call seq2feats
-        # Since we moved 'seq' and 'time_mat' to self.dev above, 
-        # seq2feats will no longer complain about device mismatches.
+        # 3. Call seq2feats 
+        # We pass the CPU tensors; line 143 (which we fixed above) will move them to self.dev
         log_feats = self.seq2feats(seq, time_mat)
         
-        # 4. Extract the last hidden state
-        final_feat = log_feats[:, -1, :] # [Batch, H]
+        # 4. Extract last hidden state and move to device for the final matmul
+        final_feat = log_feats[:, -1, :].to(self.dev) # [Batch, H]
 
-        # 5. Score the specific items
-        item_embs = self.item_emb(item_idx) # [Batch, 100, H]
+        # 5. Score the items on the device
+        item_embs = self.item_emb(item_idx.to(self.dev)) # [Batch, 100, H]
         
-        # Dot product calculation
+        # Dot product
         logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1) 
-    
+        
         return logits
