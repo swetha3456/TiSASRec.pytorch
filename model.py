@@ -99,13 +99,13 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
 
         # TODO: loss += args.l2_emb for regularizing embedding vectors during training
         # https://stackoverflow.com/questions/42704283/adding-l1-l2-regularization-in-pytorch
-        self.item_emb = torch.nn.Embedding(self.item_num+1, args.hidden_units, padding_idx=0)
+        self.item_emb = torch.nn.Embedding(self.itemnum + 10, args.hidden_units, padding_idx=0)
         self.item_emb_dropout = torch.nn.Dropout(p=args.dropout_rate)
 
-        self.abs_pos_K_emb = torch.nn.Embedding(args.maxlen, args.hidden_units)
-        self.abs_pos_V_emb = torch.nn.Embedding(args.maxlen, args.hidden_units)
-        self.time_matrix_K_emb = torch.nn.Embedding(args.time_span+1, args.hidden_units)
-        self.time_matrix_V_emb = torch.nn.Embedding(args.time_span+1, args.hidden_units)
+        self.abs_pos_K_emb = torch.nn.Embedding(args.maxlen + 10, args.hidden_units)
+        self.abs_pos_V_emb = torch.nn.Embedding(args.maxlen + 10, args.hidden_units)
+        self.time_matrix_K_emb = torch.nn.Embedding(args.time_span + 10, args.hidden_units)
+        self.time_matrix_V_emb = torch.nn.Embedding(args.time_span + 10, args.hidden_units)
 
         self.item_emb_dropout = torch.nn.Dropout(p=args.dropout_rate)
         self.abs_pos_K_emb_dropout = torch.nn.Dropout(p=args.dropout_rate)

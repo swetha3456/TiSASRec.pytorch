@@ -65,19 +65,16 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, relation_m
             seq[idx] = i[0]
             time_seq[idx] = i[1]
             pos[idx] = nxt
-            
+
             if nxt != 0:
-                # --- START HARD NEGATIVE LOGIC ---
                 target_cat = item_to_cat.get(nxt)
-                # Candidates: Items in same category MINUS items user has already seen
-                candidates = list(cat_to_items_set.get(target_cat, set()) - ts)
+                # 1. Ensure we only pull candidates that are within the valid embedding range
+                candidates = [i for i in list(cat_to_items_set.get(target_cat, set()) - ts) if i <= itemnum]
                 
                 if len(candidates) > 0:
                     neg[idx] = random.choice(candidates)
                 else:
-                    # Fallback to standard random if category is empty/fully seen
                     neg[idx] = random_neq(1, itemnum + 1, ts)
-                # --- END HARD NEGATIVE LOGIC ---
                 
             nxt = i[0]
             idx -= 1
