@@ -199,24 +199,30 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
 
         return pos_logits, neg_logits # pos_pred, neg_pred
 
-    def predict(self, user_ids, log_seqs, time_matrices, item_indices): # Added item_indices
-        # 1. Safety Clamp for sequences
-        log_seqs = torch.clamp(torch.LongTensor(log_seqs).to(self.dev), 0, self.item_num)
+    def predict(self, user_ids, log_seqs, time_matrices, item_indices):
+        # 1. Convert to tensors and move to the device (GPU) immediately
+        # We use .to(self.dev) to match the model's location
+        u = torch.from_numpy(np.array(user_ids)).long().to(self.dev)
+        seq = torch.from_numpy(np.array(log_seqs)).long().to(self.dev)
+        time_mat = torch.from_numpy(np.array(time_matrices)).long().to(self.dev)
+        item_idx = torch.from_numpy(np.array(item_indices)).long().to(self.dev)
+
+        # 2. Safety Clamp to prevent index out of bounds
+        seq = torch.clamp(seq, 0, self.item_num)
+        item_idx = torch.clamp(item_idx, 0, self.item_num)
+
+        # 3. Call seq2feats
+        # Since we moved 'seq' and 'time_mat' to self.dev above, 
+        # seq2feats will no longer complain about device mismatches.
+        log_feats = self.seq2feats(seq, time_mat)
         
-        # 2. Get sequence features
-        log_feats = self.seq2feats(log_seqs, time_matrices)
+        # 4. Extract the last hidden state
         final_feat = log_feats[:, -1, :] # [Batch, H]
 
-        # 3. Safety Clamp for the items we are ranking
-        item_indices = torch.clamp(torch.LongTensor(item_indices).to(self.dev), 0, self.item_num)
+        # 5. Score the specific items
+        item_embs = self.item_emb(item_idx) # [Batch, 100, H]
         
-        # 4. Lookup embeddings for those specific 100 items
-        # item_indices shape is usually [Batch, 100]
-        item_embs = self.item_emb(item_indices) # [Batch, 100, H]
-        
-        # 5. Compute scores (dot product)
-        # final_feat: [Batch, H] -> unsqueeze to [Batch, 1, H]
-        # item_embs: [Batch, 100, H] -> transpose to [Batch, H, 100]
-        logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1) # [Batch, 100]
-        
+        # Dot product calculation
+        logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1) 
+    
         return logits
