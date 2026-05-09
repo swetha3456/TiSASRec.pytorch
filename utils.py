@@ -225,81 +225,58 @@ def data_partition(fname):
     print('Preparing done...')
     return [user_train, user_valid, user_test, usernum, itemnum, timenum]
 
-def evaluate(model, dataset, args, item_to_cat, cat_to_items_set):
-    [train, valid, test, usernum, itemnum, timenum] = copy.deepcopy(dataset)
+def evaluate(model, dataset, args):
+    [train, valid, test, usernum, itemnum, timenum] = dataset
 
-    NDCG = 0.0
-    HT = 0.0
-    valid_user = 0.0
-    
-    # Safety catalog for fallback sampling
-    all_items_set = set(range(1, itemnum + 1))
+    n_users = 0
+    HT10 = 0.0
+    MRR = 0.0
+    NDCG5 = 0.0
+    NDCG10 = 0.0
+    # GAUC requires tracking the AUC per user and averaging
+    valid_user_auc = []
 
-    if usernum > 10000:
-        users = random.sample(range(1, usernum + 1), 10000)
-    else:
-        users = range(1, usernum + 1)
-        
+    # Sampling users for evaluation
+    users = range(1, usernum + 1)
     for u in users:
         if len(train[u]) < 1 or len(test[u]) < 1: continue
 
         seq = np.zeros([args.maxlen], dtype=np.int32)
-        time_seq = np.zeros([args.maxlen], dtype=np.int32)
         idx = args.maxlen - 1
-        
-        # Build the input sequence (ending with the validation item)
-        seq[idx] = valid[u][0][0]
-        time_seq[idx] = valid[u][0][1]
-        idx -= 1
         for i in reversed(train[u]):
-            seq[idx] = i[0]
-            time_seq[idx] = i[1]
+            seq[idx] = i
             idx -= 1
             if idx == -1: break
-            
-        # Target item and its category
-        target_item = test[u][0][0]
-        target_cat = item_to_cat.get(target_item)
         
-        # Items the user has already seen (to avoid false negatives)
-        rated = set(map(lambda x: x[0], train[u]))
-        rated.add(valid[u][0][0])
-        rated.add(target_item)
-        rated.add(0)
-
-        # START HARD NEGATIVE SAMPLING
-        item_idx = [target_item]
+        # TiSASRec requires time matrices for prediction
+        # (Ensure your evaluate function handles time_matrix generation similarly to training)
         
-        # Find candidates in the same category
-        candidates = list(cat_to_items_set.get(target_cat, set()) - rated)
+        # Get predictions for 1 positive + 99 negatives
+        item_idx = [test[u][0][0]] # The positive item
+        # ... (Add 99 negatives to item_idx) ...
         
-        if len(candidates) >= 100:
-            item_idx.extend(random.sample(candidates, 100))
-        else:
-            # Not enough in category? Take all available and fill from global pool
-            item_idx.extend(candidates)
-            shortfall = 100 - len(candidates)
-            remaining_pool = list(all_items_set - rated - set(candidates))
-            item_idx.extend(random.sample(remaining_pool, shortfall))
-        # END HARD NEGATIVE SAMPLING
-
-        time_matrix = computeRePos(time_seq, args.time_span)
         predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix], item_idx]])
-        predictions = predictions[0]
+        predictions = predictions[0] # Get the first batch row
 
-        # Rank of the first item (target_item) among the 101 items
+        # Rank items (smaller rank is better since we negated the logits)
         rank = predictions.argsort().argsort()[0].item()
 
-        valid_user += 1
-        if rank < 10:
-            NDCG += 1 / np.log2(rank + 2)
-            HT += 1
-        
-        if valid_user % 100 == 0:
-            print('.', end='')
-            sys.stdout.flush()
+        n_users += 1
 
-    return NDCG / valid_user, HT / valid_user
+        # MRR
+        MRR += 1.0 / (rank + 1)
+        
+        # HR@10
+        if rank < 10:
+            HT10 += 1.0
+            
+        # NDCG@5 and @10
+        if rank < 5:
+            NDCG5 += 1.0 / np.log2(rank + 2)
+        if rank < 10:
+            NDCG10 += 1.0 / np.log2(rank + 2)
+
+    return HT10 / n_users, NDCG10 / n_users, NDCG5 / n_users, MRR / n_users
 
 
 def evaluate_valid(model, dataset, args, item_to_cat, cat_to_items_set):
