@@ -199,20 +199,24 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
 
         return pos_logits, neg_logits # pos_pred, neg_pred
 
-    def predict(self, user_ids, log_seqs, time_matrices):
-        # 1. Clamp input sequences to safety
+    def predict(self, user_ids, log_seqs, time_matrices, item_indices): # Added item_indices
+        # 1. Safety Clamp for sequences
         log_seqs = torch.clamp(torch.LongTensor(log_seqs).to(self.dev), 0, self.item_num)
         
         # 2. Get sequence features
         log_feats = self.log2feats(log_seqs, time_matrices)
-        final_feat = log_feats[:, -1, :] # [Batch, Hidden_Units]
+        final_feat = log_feats[:, -1, :] # [Batch, H]
 
-        # 3. Explicitly slice the embedding weights
-        # We only take rows 1 through item_num (skipping padding at 0 and safety buffer at the end)
-        item_embs = self.item_emb.weight[1:self.item_num + 1] # [item_num, Hidden_Units]
+        # 3. Safety Clamp for the items we are ranking
+        item_indices = torch.clamp(torch.LongTensor(item_indices).to(self.dev), 0, self.item_num)
         
-        # 4. Compute scores for ALL items
-        # Use matmul for a clean [Batch, item_num] output
-        logits = torch.matmul(final_feat, item_embs.t())
+        # 4. Lookup embeddings for those specific 100 items
+        # item_indices shape is usually [Batch, 100]
+        item_embs = self.item_emb(item_indices) # [Batch, 100, H]
+        
+        # 5. Compute scores (dot product)
+        # final_feat: [Batch, H] -> unsqueeze to [Batch, 1, H]
+        # item_embs: [Batch, 100, H] -> transpose to [Batch, H, 100]
+        logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1) # [Batch, 100]
         
         return logits
