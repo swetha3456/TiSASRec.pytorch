@@ -186,7 +186,7 @@ class TiSASRec(torch.nn.Module): # similar to torch.nn.MultiheadAttention
         return log_feats
 
     def forward(self, user_ids, log_seqs, time_matrices, pos_seqs, neg_seqs): # for training
-        log_feats = self.seq2feats(user_ids, log_seqs, time_matrices)
+        log_feats = self.seq2feats(log_seqs, time_matrices)
 
         pos_embs = self.item_emb(torch.LongTensor(pos_seqs).to(self.dev))
         neg_embs = self.item_emb(torch.LongTensor(neg_seqs).to(self.dev))
