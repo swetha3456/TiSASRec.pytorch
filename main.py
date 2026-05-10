@@ -139,7 +139,7 @@ for epoch in range(epoch_start_idx, args.num_epochs + 1):
         if step % 10 == 0:
             print("loss in epoch {} iteration {}: {}".format(epoch, step, loss.item()))
 
-    if epoch % 20 == 0:
+    if epoch % 1 == 0:
         model.eval()
         t1 = time.time() - t0
         T += t1
