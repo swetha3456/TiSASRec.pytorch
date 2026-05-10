@@ -225,7 +225,7 @@ def data_partition(fname):
     print('Preparing done...')
     return [user_train, user_valid, user_test, usernum, itemnum, timenum]
 
-def evaluate(model, dataset, args):
+def evaluate(model, dataset, args, item_to_cat, cat_to_items_set):
     [train, valid, test, usernum, itemnum, timenum] = dataset
 
     n_users = 0
@@ -233,50 +233,79 @@ def evaluate(model, dataset, args):
     MRR = 0.0
     NDCG5 = 0.0
     NDCG10 = 0.0
-    # GAUC requires tracking the AUC per user and averaging
-    valid_user_auc = []
+    GAUC = 0.0
 
-    # Sampling users for evaluation
     users = range(1, usernum + 1)
     for u in users:
+        # We need at least one training item and a test item to evaluate
         if len(train[u]) < 1 or len(test[u]) < 1: continue
 
+        # 1. Reconstruct Sequence and Time Sequence
         seq = np.zeros([args.maxlen], dtype=np.int32)
+        time_seq = np.zeros([args.maxlen], dtype=np.int32)
+        
         idx = args.maxlen - 1
-        for i in reversed(train[u]):
+        # train[u] is expected to be a list of (item_id, timestamp)
+        for i, t in reversed(train[u]):
             seq[idx] = i
+            time_seq[idx] = t
             idx -= 1
             if idx == -1: break
-        
-        # TiSASRec requires time matrices for prediction
-        # (Ensure your evaluate function handles time_matrix generation similarly to training)
-        
-        # Get predictions for 1 positive + 99 negatives
-        item_idx = [test[u][0][0]] # The positive item
-        # ... (Add 99 negatives to item_idx) ...
-        
-        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix], item_idx]])
-        predictions = predictions[0] # Get the first batch row
 
-        # Rank items (smaller rank is better since we negated the logits)
+        # 2. Construct the Time Matrix (The missing part)
+        # This calculates absolute time differences between all items in the sequence
+        time_matrix = np.zeros([args.maxlen, args.maxlen], dtype=np.int32)
+        for i in range(args.maxlen):
+            for j in range(args.maxlen):
+                span = abs(time_seq[i] - time_seq[j])
+                if span > args.time_span:
+                    time_matrix[i][j] = args.time_span
+                else:
+                    time_matrix[i][j] = span
+
+        # 3. Setup Items to Rank (1 Positive + 99 Negatives)
+        # test[u][0] is (positive_item_id, timestamp)
+        pos = test[u][0][0]
+        item_idx = [pos]
+        
+        rated = set([i[0] for i in train[u]])
+        rated.add(pos)
+        rated.add(0) # padding
+        
+        # Hard Negative Sampling using Category Mapping
+        target_cat = item_to_cat.get(pos)
+        candidates = list(cat_to_items_set.get(target_cat, set()) - rated)
+        
+        # Fill item_idx with 99 negatives
+        while len(item_idx) < 100:
+            if len(candidates) > 0:
+                neg = random.choice(candidates)
+                candidates.remove(neg)
+            else:
+                neg = np.random.randint(1, itemnum + 1)
+                while neg in rated:
+                    neg = np.random.randint(1, itemnum + 1)
+            item_idx.append(neg)
+
+        # 4. Predict and Rank
+        # predict expects: user_ids, log_seqs, time_matrices, item_indices
+        predictions = -model.predict(*[np.array(l) for l in [[u], [seq], [time_matrix], item_idx]])
+        predictions = predictions[0] # Get first row of batch
+
+        # Find the rank of the positive item (index 0 in item_idx)
         rank = predictions.argsort().argsort()[0].item()
 
         n_users += 1
-
-        # MRR
         MRR += 1.0 / (rank + 1)
-        
-        # HR@10
+        GAUC += (100 - 1 - rank) / (100 - 1) # AUC for this user
+
         if rank < 10:
             HT10 += 1.0
-            
-        # NDCG@5 and @10
+            NDCG10 += 1.0 / np.log2(rank + 2)
         if rank < 5:
             NDCG5 += 1.0 / np.log2(rank + 2)
-        if rank < 10:
-            NDCG10 += 1.0 / np.log2(rank + 2)
 
-    return HT10 / n_users, NDCG10 / n_users, NDCG5 / n_users, MRR / n_users
+    return HT10 / n_users, NDCG10 / n_users, NDCG5 / n_users, MRR / n_users, GAUC / n_users
 
 
 def evaluate_valid(model, dataset, args, item_to_cat, cat_to_items_set):
